@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
-Ultimate Uptime Bot - Railway Optimized
-Maximum Threads & RPS - Zero Error
+ULTIMATE UPTIME BOT - Render & Railway Compatible
+Zero Error - Maximum Performance
 """
+
+# ===================== CONFIGURATION =====================
+# এখানে আপনার তথ্য দিন
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # আপনার বট টোকেন দিন
+ADMIN_IDS = [123456789]  # আপনার টেলিগ্রাম ইউজার আইডি দিন
+MAX_THREADS = 250  # সর্বোচ্চ থ্রেড (পরিবর্তন করতে পারেন)
+MAX_RPS = 1500  # সর্বোচ্চ RPS (পরিবর্তন করতে পারেন)
+DAILY_CREDITS = 5  # দৈনিক ফ্রি ক্রেডিট
+# ========================================================
 
 import os
 import sys
@@ -12,64 +21,54 @@ import time
 import json
 import logging
 import random
+import traceback
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor
-import traceback
 
 # Disable all warnings
 import warnings
 warnings.filterwarnings('ignore')
+os.environ['PYTHONWARNINGS'] = 'ignore'
 
 # Disable SSL warnings
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Configure logging for Railway
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
-# Railway environment check
-IS_RAILWAY = os.environ.get('RAILWAY_ENVIRONMENT', False) or os.environ.get('RAILWAY_SERVICE_ID', False)
+# ===================== INSTALL DEPENDENCIES =====================
+def install_dependencies():
+    """Auto install missing dependencies"""
+    deps = {
+        'aiohttp': 'aiohttp==3.9.0',
+        'telegram': 'python-telegram-bot==20.7'
+    }
+    
+    for module, package in deps.items():
+        try:
+            __import__(module)
+        except ImportError:
+            logger.info(f"Installing {package}...")
+            os.system(f"pip install {package} -q --no-cache-dir")
 
-# Bot token from environment
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+install_dependencies()
 
-# Admin IDs - Add your Telegram user IDs here
-ADMIN_IDS = [int(x.strip()) for x in os.environ.get('ADMIN_IDS', '123456789').split(',')]
+# Now import dependencies
+import aiohttp
+from aiohttp import ClientTimeout, TCPConnector, ClientSession
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# Data file
+# ===================== DATA MANAGER =====================
 DATA_FILE = 'bot_data.json'
-
-# MAXIMUM PERFORMANCE SETTINGS
-MAX_THREADS = int(os.environ.get('MAX_THREADS', '200'))  # Maximum threads
-MAX_RPS = int(os.environ.get('MAX_RPS', '1000'))        # Maximum RPS
-DEFAULT_RPS = int(os.environ.get('DEFAULT_RPS', '300')) # Default RPS
-
-# Import aiohttp with error handling
-try:
-    import aiohttp
-    from aiohttp import ClientTimeout, TCPConnector, ClientSession
-except ImportError:
-    os.system('pip install aiohttp -q')
-    import aiohttp
-    from aiohttp import ClientTimeout, TCPConnector, ClientSession
-
-# Import telegram with error handling
-try:
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-except ImportError:
-    os.system('pip install python-telegram-bot==20.7 -q')
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 @dataclass
 class UserData:
@@ -79,7 +78,7 @@ class UserData:
     total_visits: int = 0
     daily_visits: int = 0
     last_visit_date: str = ""
-    credits: int = 3
+    credits: int = DAILY_CREDITS
     total_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
@@ -88,8 +87,8 @@ class UserData:
     last_url: str = ""
     last_rps: int = 0
     is_admin: bool = False
-    created_at: str = ""
     premium_until: str = ""
+    created_at: str = ""
     
     def to_dict(self):
         return asdict(self)
@@ -106,6 +105,7 @@ class DataManager:
         self.lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
         self.load_data()
+        logger.info(f"DataManager initialized with {len(self.users)} users")
     
     def load_data(self):
         try:
@@ -114,7 +114,7 @@ class DataManager:
                     data = json.load(f)
                     for user_id, user_data in data.get('users', {}).items():
                         self.users[int(user_id)] = UserData.from_dict(user_data)
-                logger.info(f"Loaded {len(self.users)} users from data file")
+                logger.info(f"Loaded {len(self.users)} users from {DATA_FILE}")
         except Exception as e:
             logger.error(f"Error loading data: {e}")
     
@@ -136,13 +136,14 @@ class DataManager:
                 user = UserData(
                     user_id=user_id,
                     username=username,
-                    first_name=first_name,
-                    credits=9999 if is_admin else 3,
+                    first_name=first_name or str(user_id),
+                    credits=99999 if is_admin else DAILY_CREDITS,
                     is_admin=is_admin,
                     created_at=datetime.now().isoformat()
                 )
                 self.users[user_id] = user
                 self.save_data()
+                logger.info(f"New user registered: {user_id}")
             else:
                 user = self.users[user_id]
                 if username:
@@ -150,12 +151,13 @@ class DataManager:
                 if first_name:
                     user.first_name = first_name
                 
+                # Reset daily credits
                 today = datetime.now().strftime('%Y-%m-%d')
                 if user.last_visit_date != today:
                     user.daily_visits = 0
                     user.last_visit_date = today
                     if not user.is_admin and not user.premium_until:
-                        user.credits = 3
+                        user.credits = DAILY_CREDITS
                     self.save_data()
             
             return user
@@ -163,15 +165,20 @@ class DataManager:
     def use_credit(self, user_id: int) -> bool:
         user = self.get_user(user_id)
         
+        # Admin has unlimited
         if user.is_admin:
             return True
         
         # Check premium
         if user.premium_until:
-            premium_date = datetime.fromisoformat(user.premium_until)
-            if premium_date > datetime.now():
-                return True
+            try:
+                premium_date = datetime.fromisoformat(user.premium_until)
+                if premium_date > datetime.now():
+                    return True
+            except:
+                pass
         
+        # Check credits
         if user.credits > 0:
             user.credits -= 1
             user.daily_visits += 1
@@ -183,7 +190,6 @@ class DataManager:
     def add_credits(self, user_id: int, amount: int) -> bool:
         if user_id not in self.users:
             return False
-        
         user = self.users[user_id]
         user.credits += amount
         self.save_data()
@@ -192,7 +198,6 @@ class DataManager:
     def set_premium(self, user_id: int, days: int) -> bool:
         if user_id not in self.users:
             return False
-        
         user = self.users[user_id]
         premium_until = datetime.now() + timedelta(days=days)
         user.premium_until = premium_until.isoformat()
@@ -226,15 +231,17 @@ class DataManager:
             self.running_sessions[user_id]['running'] = False
         
         if user_id in self.running_tasks:
-            self.running_tasks[user_id].cancel()
             try:
+                self.running_tasks[user_id].cancel()
                 del self.running_tasks[user_id]
             except:
                 pass
 
+# Global data manager
+data_manager = DataManager()
+
+# ===================== ULTRA VISITOR =====================
 class UltraVisitor:
-    """Ultra high-performance visitor with maximum threads"""
-    
     def __init__(self, url, target_rps=500):
         self.url = url
         self.target_rps = min(target_rps, MAX_RPS)
@@ -244,12 +251,12 @@ class UltraVisitor:
         self.running = True
         self.lock = threading.Lock()
         self.start_time = None
-        self.last_stats = 0
+        self.last_log_time = time.time()
         
-        # Maximum threads for performance
-        self.thread_count = min(MAX_THREADS, max(20, int(self.target_rps / 3) + 10))
+        # Calculate threads
+        self.thread_count = min(MAX_THREADS, max(15, int(self.target_rps / 4) + 10))
         
-        # Extensive user agents
+        # User agents
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.6099.210 Safari/537.36',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.6099.210 Safari/537.36 Edg/120.0.0.0',
@@ -262,12 +269,15 @@ class UltraVisitor:
             'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/537.36',
             'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/120.0.6099.210',
             'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 Chrome/120.0.6099.210',
+            'Mozilla/5.0 (Linux; Android 12; SM-G998B) AppleWebKit/537.36 Chrome/119.0.6045.163',
+            'Mozilla/5.0 (Linux; Android 11; SM-G973F) AppleWebKit/537.36 Chrome/119.0.6045.163',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/119.0.6045.199 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/118.0.5993.88 Safari/537.36',
         ]
         
-        print(f"[+] Ultra Mode: {self.thread_count} threads, {self.target_rps} RPS")
+        logger.info(f"Visitor initialized: {self.thread_count} threads, {self.target_rps} RPS for {url}")
     
     async def make_request(self, session, headers):
-        """Super fast request with connection pooling"""
         try:
             async with session.get(self.url, headers=headers, ssl=False) as response:
                 with self.lock:
@@ -284,17 +294,15 @@ class UltraVisitor:
             return False
     
     async def worker(self, worker_id):
-        """High-performance worker"""
-        # Optimized connection pool
         connector = TCPConnector(
-            limit=200,
-            limit_per_host=200,
+            limit=300,
+            limit_per_host=300,
             ttl_dns_cache=300,
             ssl=False,
             force_close=False,
             enable_cleanup_closed=True
         )
-        timeout = ClientTimeout(total=3, connect=1.5, sock_read=2)
+        timeout = ClientTimeout(total=3, connect=1.5, sock_read=2.5)
         
         async with ClientSession(connector=connector, timeout=timeout) as session:
             while self.running:
@@ -318,21 +326,13 @@ class UltraVisitor:
                 
                 await self.make_request(session, headers)
                 
-                # Minimal delay for max performance
                 if self.target_rps > 0:
                     delay = 1.0 / (self.target_rps / self.thread_count)
-                    if delay > 0.001:
+                    if delay > 0.0005:
                         await asyncio.sleep(delay)
     
     def start(self):
-        """Start the visitor"""
-        print(f"\n{'='*60}")
-        print(f"🚀 ULTRA VISITOR STARTED")
-        print(f"📍 Target: {self.url}")
-        print(f"⚡ RPS: {self.target_rps}")
-        print(f"🧵 Threads: {self.thread_count}")
-        print(f"{'='*60}\n")
-        
+        logger.info(f"Starting visitor: {self.url}")
         self.start_time = time.time()
         self.running = True
         
@@ -352,22 +352,22 @@ class UltraVisitor:
                 rps = total / elapsed if elapsed > 0 else 0
                 success_rate = (success / max(1, total)) * 100
                 
-                print(f"\r📊 Total: {total:>6} | ✅ {success:>6} | ❌ {failed:>5} | ⚡ {rps:>6.0f} RPS | 📈 {success_rate:>5.1f}%", end="")
+                logger.info(f"📊 Total: {total} | ✅ {success} | ❌ {failed} | ⚡ {rps:.0f} RPS | 📈 {success_rate:.1f}%")
         
         stats_thread = threading.Thread(target=update_stats, daemon=True)
         stats_thread.start()
         
-        # Start async workers
+        # Start workers
         try:
             asyncio.run(self.run_workers())
         except KeyboardInterrupt:
-            self.stop()
+            logger.info("Visitor stopped by user")
         except Exception as e:
             logger.error(f"Visitor error: {e}")
+        finally:
             self.stop()
     
     async def run_workers(self):
-        """Run all workers"""
         tasks = []
         for i in range(self.thread_count):
             task = asyncio.create_task(self.worker(i))
@@ -379,28 +379,16 @@ class UltraVisitor:
             pass
     
     def stop(self):
-        """Stop gracefully"""
         self.running = False
-        time.sleep(1)
+        logger.info("Visitor stopped")
         
-        elapsed = time.time() - self.start_time
+        elapsed = time.time() - self.start_time if self.start_time else 0
         success_rate = (self.successful / max(1, self.total_requests)) * 100
         avg_rps = self.total_requests / elapsed if elapsed > 0 else 0
         
-        print(f"\n\n{'='*60}")
-        print(f"📊 FINAL REPORT")
-        print(f"{'='*60}")
-        print(f"⏱️ Duration: {elapsed:.1f}s")
-        print(f"🔄 Total: {self.total_requests:,}")
-        print(f"✅ Success: {self.successful:,}")
-        print(f"❌ Failed: {self.failed:,}")
-        print(f"📈 Success Rate: {success_rate:.1f}%")
-        print(f"⚡ Average RPS: {avg_rps:.1f}")
-        print(f"{'='*60}\n")
+        logger.info(f"FINAL: Total={self.total_requests} Success={self.successful} Failed={self.failed} Rate={success_rate:.1f}% RPS={avg_rps:.1f}")
 
-# Bot handlers
-data_manager = DataManager()
-
+# ===================== BOT HANDLERS =====================
 async def show_main_menu(bot, user_id, edit=False, message_id=None, chat_id=None):
     """Show main menu"""
     user = data_manager.get_user(user_id)
@@ -412,8 +400,9 @@ async def show_main_menu(bot, user_id, edit=False, message_id=None, chat_id=None
     url_display = session.get('url', 'N/A')[:35] + '...' if is_running else "No active visit"
     
     menu_text = (
-        f"🤖 **ULTIMATE UPTIME BOT**\n\n"
-        f"👤 {user.first_name}\n"
+        f"🤖 **ULTIMATE UPTIME BOT**\n"
+        f"{'='*30}\n\n"
+        f"👤 User: {user.first_name}\n"
         f"💰 Credits: `{user.credits}`\n"
         f"📊 Visits: `{user.sessions}`\n"
         f"🔄 Requests: `{user.total_requests:,}`\n"
@@ -459,11 +448,10 @@ async def show_main_menu(bot, user_id, edit=False, message_id=None, chat_id=None
         await bot.send_message(user_id, menu_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def run_ultra_visitor(user_id, url, rps, bot):
-    """Run ultra visitor"""
+    """Run visitor in background"""
     try:
         visitor = UltraVisitor(url, rps)
         
-        # Start in thread pool
         def run_visitor():
             visitor.start()
         
@@ -471,37 +459,41 @@ async def run_ultra_visitor(user_id, url, rps, bot):
         await loop.run_in_executor(data_manager.executor, run_visitor)
         
         # Update stats
+        duration = time.time() - visitor.start_time if visitor.start_time else 0
         data_manager.update_stats(
             user_id,
             visitor.total_requests,
             visitor.successful,
             visitor.failed,
-            time.time() - visitor.start_time,
+            duration,
             url,
             rps
         )
         
         # Send final report
         success_rate = (visitor.successful / max(1, visitor.total_requests)) * 100
-        avg_rps = visitor.total_requests / max(1, time.time() - visitor.start_time)
+        avg_rps = visitor.total_requests / max(1, duration)
         
+        user = data_manager.get_user(user_id)
         await bot.send_message(
             user_id,
-            f"✅ **VISIT COMPLETED**\n\n"
+            f"✅ **VISIT COMPLETED**\n"
+            f"{'='*30}\n\n"
             f"🔄 Total: `{visitor.total_requests:,}`\n"
             f"✅ Success: `{visitor.successful:,}`\n"
             f"❌ Failed: `{visitor.failed:,}`\n"
-            f"📈 Rate: `{success_rate:.1f}%`\n"
-            f"⚡ RPS: `{avg_rps:.1f}`\n\n"
-            f"💰 Credits Left: `{data_manager.users[user_id].credits}`",
+            f"📈 Success Rate: `{success_rate:.1f}%`\n"
+            f"⚡ Average RPS: `{avg_rps:.1f}`\n"
+            f"⏱️ Duration: `{duration:.1f}s`\n\n"
+            f"💰 Credits Left: `{user.credits}`",
             parse_mode='Markdown'
         )
         
     except Exception as e:
-        logger.error(f"Visitor error: {e}")
+        logger.error(f"Visitor error for {user_id}: {e}")
         await bot.send_message(
             user_id,
-            f"❌ Error: `{str(e)[:200]}`",
+            f"❌ **Error:** `{str(e)[:200]}`",
             parse_mode='Markdown'
         )
     
@@ -509,25 +501,15 @@ async def run_ultra_visitor(user_id, url, rps, bot):
         data_manager.stop_session(user_id)
         await show_main_menu(bot, user_id)
 
-# Command Handlers
+# ===================== COMMAND HANDLERS =====================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start"""
     user = update.effective_user
     data_manager.get_user(user.id, user.username or "", user.first_name or "")
-    
-    await update.message.reply_text(
-        f"👋 **WELCOME {user.first_name}!**\n\n"
-        f"🚀 Ultimate Uptime Bot\n"
-        f"⚡ Max Performance Mode\n"
-        f"🧵 {MAX_THREADS} Threads\n"
-        f"📈 {MAX_RPS} Max RPS\n\n"
-        f"Click below to start!",
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 OPEN MENU", callback_data="main_menu")]
-        ])
-    )
+    await show_main_menu(context.bot, user.id)
 
 async def visit_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show visit configuration"""
     query = update.callback_query
     await query.answer()
     
@@ -537,7 +519,7 @@ async def visit_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user.is_admin and user.credits <= 0:
         await query.edit_message_text(
             "⛔ **NO CREDITS LEFT**\n\n"
-            f"Daily limit: 3 visits\n"
+            f"Daily limit: {DAILY_CREDITS} visits\n"
             f"Used today: {user.daily_visits}\n\n"
             "Contact admin for more credits.",
             parse_mode='Markdown'
@@ -561,6 +543,7 @@ async def visit_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['awaiting_url'] = True
 
 async def handle_url_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle URL input"""
     user_id = update.effective_user.id
     
     if not context.user_data.get('awaiting_url', False):
@@ -578,7 +561,7 @@ async def handle_url_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['awaiting_url'] = False
     context.user_data['visit_url'] = url
     
-    # RPS selection with max values
+    # RPS selection
     keyboard = [
         [
             InlineKeyboardButton("🐢 100 RPS", callback_data="rps_100"),
@@ -589,7 +572,7 @@ async def handle_url_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("⚡ 500 RPS", callback_data="rps_500")
         ],
         [
-            InlineKeyboardButton("🔥 700 RPS", callback_data="rps_700"),
+            InlineKeyboardButton("🔥 750 RPS", callback_data="rps_750"),
             InlineKeyboardButton("💥 1000 RPS", callback_data="rps_1000")
         ],
         [InlineKeyboardButton("🔙 CANCEL", callback_data="main_menu")]
@@ -608,6 +591,7 @@ async def handle_url_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['awaiting_rps'] = True
 
 async def rps_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle RPS selection"""
     query = update.callback_query
     await query.answer()
     
@@ -632,11 +616,14 @@ async def rps_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data_manager.start_session(user_id, url, rps)
     
+    thread_count = min(MAX_THREADS, int(rps / 4) + 10)
     await query.edit_message_text(
-        f"🚀 **VISIT STARTED**\n\n"
-        f"🌐 {url}\n"
-        f"⚡ {rps} RPS\n"
-        f"🧵 {min(MAX_THREADS, int(rps / 3) + 10)} Threads\n\n"
+        f"🚀 **VISIT STARTED**\n"
+        f"{'='*30}\n\n"
+        f"🌐 URL: `{url}`\n"
+        f"⚡ RPS: `{rps}`\n"
+        f"🧵 Threads: `{thread_count}`\n"
+        f"💰 Credits Left: `{user.credits}`\n\n"
         f"📊 Running in background...",
         parse_mode='Markdown'
     )
@@ -646,6 +633,7 @@ async def rps_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data_manager.running_tasks[user_id] = task
 
 async def stop_visit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop visit"""
     query = update.callback_query
     await query.answer()
     
@@ -664,6 +652,7 @@ async def stop_visit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user stats"""
     query = update.callback_query
     await query.answer()
     
@@ -673,17 +662,18 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     avg_rps = user.total_requests / user.total_time if user.total_time > 0 else 0
     
     stats_text = (
-        f"📊 **YOUR STATISTICS**\n\n"
-        f"👤 {user.first_name}\n"
-        f"🆔 `{user.user_id}`\n\n"
+        f"📊 **YOUR STATISTICS**\n"
+        f"{'='*30}\n\n"
+        f"👤 User: {user.first_name}\n"
+        f"🆔 ID: `{user.user_id}`\n\n"
         f"🔄 Total Requests: `{user.total_requests:,}`\n"
         f"✅ Success: `{user.successful_requests:,}`\n"
         f"❌ Failed: `{user.failed_requests:,}`\n"
-        f"📈 Rate: `{success_rate:.1f}%`\n"
+        f"📈 Success Rate: `{success_rate:.1f}%`\n"
         f"⚡ Avg RPS: `{avg_rps:.1f}`\n\n"
-        f"📅 Sessions: `{user.sessions}`\n"
+        f"📅 Total Sessions: `{user.sessions}`\n"
         f"💰 Credits: `{user.credits}`\n"
-        f"🌐 Last: `{user.last_url[:40]}...`"
+        f"🌐 Last URL: `{user.last_url[:40]}...`" if user.last_url else ""
     )
     
     keyboard = [[InlineKeyboardButton("🔙 BACK", callback_data="main_menu")]]
@@ -692,6 +682,7 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(stats_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def check_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check credits"""
     query = update.callback_query
     await query.answer()
     
@@ -702,13 +693,14 @@ async def check_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     time_left = reset_time - datetime.now()
     
     credit_text = (
-        f"💰 **CREDIT INFO**\n\n"
+        f"💰 **CREDIT INFO**\n"
+        f"{'='*30}\n\n"
         f"Available: `{user.credits}`\n"
         f"Used Today: `{user.daily_visits}`\n"
-        f"Daily Limit: `3`\n"
+        f"Daily Limit: `{DAILY_CREDITS}`\n"
         f"Admin: `{'✅' if user.is_admin else '❌'}`\n\n"
         f"⏳ Reset in: `{str(time_left).split('.')[0]}`\n"
-        f"📅 Max RPS: `{MAX_RPS}`\n"
+        f"⚡ Max RPS: `{MAX_RPS}`\n"
         f"🧵 Max Threads: `{MAX_THREADS}`"
     )
     
@@ -718,6 +710,7 @@ async def check_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(credit_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin panel"""
     query = update.callback_query
     await query.answer()
     
@@ -732,13 +725,15 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_sessions = len(data_manager.running_sessions)
     
     admin_text = (
-        f"👑 **ADMIN PANEL**\n\n"
-        f"👥 Users: `{total_users}`\n"
-        f"🔄 Requests: `{total_requests:,}`\n"
-        f"🟢 Active: `{active_sessions}`\n"
-        f"🧵 Threads: `{MAX_THREADS}`\n"
-        f"⚡ Max RPS: `{MAX_RPS}`\n\n"
-        f"🔧 Actions:"
+        f"👑 **ADMIN PANEL**\n"
+        f"{'='*30}\n\n"
+        f"👥 Total Users: `{total_users}`\n"
+        f"🔄 Total Requests: `{total_requests:,}`\n"
+        f"🟢 Active Sessions: `{active_sessions}`\n"
+        f"🧵 Max Threads: `{MAX_THREADS}`\n"
+        f"⚡ Max RPS: `{MAX_RPS}`\n"
+        f"📅 Daily Credits: `{DAILY_CREDITS}`\n\n"
+        f"🔧 **Actions:**"
     )
     
     keyboard = [
@@ -753,6 +748,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(admin_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def admin_add_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add credits"""
     query = update.callback_query
     await query.answer()
     
@@ -772,6 +768,7 @@ async def admin_add_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['awaiting_add_credits'] = True
 
 async def admin_add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add premium"""
     query = update.callback_query
     await query.answer()
     
@@ -791,6 +788,7 @@ async def admin_add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['awaiting_add_premium'] = True
 
 async def admin_list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List users"""
     query = update.callback_query
     await query.answer()
     
@@ -814,6 +812,7 @@ async def admin_list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def admin_system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """System status"""
     query = update.callback_query
     await query.answer()
     
@@ -827,13 +826,15 @@ async def admin_system_status(update: Update, context: ContextTypes.DEFAULT_TYPE
     active_sessions = len(data_manager.running_sessions)
     
     status_text = (
-        f"📊 **SYSTEM STATUS**\n\n"
+        f"📊 **SYSTEM STATUS**\n"
+        f"{'='*30}\n\n"
         f"👥 Users: `{total_users}`\n"
         f"🔄 Requests: `{total_requests:,}`\n"
         f"🟢 Active: `{active_sessions}`\n"
         f"🧵 Threads: `{MAX_THREADS}`\n"
         f"⚡ Max RPS: `{MAX_RPS}`\n"
-        f"📁 Data: `{DATA_FILE}`\n"
+        f"📅 Daily Credits: `{DAILY_CREDITS}`\n"
+        f"📁 Data File: `{DATA_FILE}`\n"
         f"🚀 Status: `✅ Running`"
     )
     
@@ -843,25 +844,27 @@ async def admin_system_status(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(status_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Help menu"""
     query = update.callback_query
     await query.answer()
     
     help_text = (
-        f"❓ **HELP GUIDE**\n\n"
+        f"❓ **HELP GUIDE**\n"
+        f"{'='*30}\n\n"
         f"**How to use:**\n"
         f"1️⃣ Click START VISIT\n"
-        f"2️⃣ Enter URL\n"
+        f"2️⃣ Enter website URL\n"
         f"3️⃣ Select RPS speed\n"
         f"4️⃣ Wait for completion\n\n"
-        f"**Credits:**\n"
-        f"• Free: 3 credits daily\n"
+        f"**Credits System:**\n"
+        f"• Free: {DAILY_CREDITS} credits daily\n"
         f"• Each visit = 1 credit\n"
-        f"• Resets at midnight\n\n"
+        f"• Resets at midnight (UTC)\n\n"
         f"**Performance:**\n"
         f"• Max RPS: `{MAX_RPS}`\n"
-        f"• Threads: `{MAX_THREADS}`\n"
+        f"• Max Threads: `{MAX_THREADS}`\n"
         f"• Optimized for uptime\n\n"
-        f"⚠️ Only use on own websites!"
+        f"⚠️ **Legal:** Only use on websites you own or have permission!"
     )
     
     keyboard = [[InlineKeyboardButton("🔙 BACK", callback_data="main_menu")]]
@@ -870,6 +873,7 @@ async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(help_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def no_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """No credits message"""
     query = update.callback_query
     await query.answer()
     
@@ -879,13 +883,14 @@ async def no_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⛔ **NO CREDITS**\n\n"
         f"Available: `{user.credits}`\n"
         f"Used Today: `{user.daily_visits}`\n"
-        f"Daily Limit: `3`\n\n"
+        f"Daily Limit: `{DAILY_CREDITS}`\n\n"
         f"⏳ Resets at midnight\n"
         f"Contact admin for more!",
         parse_mode='Markdown'
     )
 
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text input"""
     user_id = update.effective_user.id
     text = update.message.text
     
@@ -938,6 +943,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle menu callbacks"""
     query = update.callback_query
     await query.answer()
     
@@ -965,6 +971,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handlers[data]()
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler"""
     logger.error(f"Update {update} caused error: {context.error}")
     logger.error(traceback.format_exc())
     
@@ -972,45 +979,54 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 update.effective_user.id,
-                "⚠️ An error occurred. Please try again.",
+                "⚠️ An error occurred. Please try again or contact admin.",
                 parse_mode='Markdown'
             )
         except:
             pass
 
+# ===================== MAIN =====================
 def main():
     """Main function"""
-    if BOT_TOKEN == 'YOUR_BOT_TOKEN_HERE':
-        print("⚠️ Set BOT_TOKEN environment variable!")
+    # Check bot token
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("\n" + "="*50)
+        print("❌ ERROR: BOT_TOKEN not configured!")
+        print("Please edit main.py and add your bot token.")
+        print("="*50 + "\n")
         sys.exit(1)
     
-    print("=" * 60)
+    # Print startup info
+    print("\n" + "="*50)
     print("🚀 ULTIMATE UPTIME BOT")
-    print("=" * 60)
+    print("="*50)
     print(f"🤖 Bot Token: {BOT_TOKEN[:10]}...")
     print(f"👑 Admins: {ADMIN_IDS}")
     print(f"🧵 Max Threads: {MAX_THREADS}")
     print(f"⚡ Max RPS: {MAX_RPS}")
+    print(f"📅 Daily Credits: {DAILY_CREDITS}")
     print(f"📁 Data File: {DATA_FILE}")
-    print(f"🏗️ Platform: {'Railway' if IS_RAILWAY else 'Local'}")
-    print("=" * 60)
-    print("✅ Bot is running...")
+    print("="*50)
+    print("✅ Bot is starting...")
     
-    # Create application with optimized settings
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("cancel", handle_text_input))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url_input))
-    application.add_handler(CallbackQueryHandler(menu_callback))
-    application.add_error_handler(error_handler)
-    
-    # Run
+    # Create application
     try:
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("cancel", handle_text_input))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url_input))
+        application.add_handler(CallbackQueryHandler(menu_callback))
+        application.add_error_handler(error_handler)
+        
+        # Start polling
+        print("✅ Bot is running! Press Ctrl+C to stop.\n")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
+        
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
+        logger.error(traceback.format_exc())
         time.sleep(5)
         main()
 
