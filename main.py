@@ -6,8 +6,8 @@ Zero Error - Maximum Performance
 
 # ===================== CONFIGURATION =====================
 # এখানে আপনার তথ্য দিন
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # আপনার বট টোকেন দিন
-ADMIN_IDS = [123456789]  # আপনার টেলিগ্রাম ইউজার আইডি দিন
+BOT_TOKEN = "8307741402:AAEebnm5-vk9g2i9m9Vij0TxyMGXr_jKQpI"  # আপনার বট টোকেন দিন
+ADMIN_IDS = [6417430059]  # আপনার টেলিগ্রাম ইউজার আইডি দিন
 MAX_THREADS = 250  # সর্বোচ্চ থ্রেড (পরিবর্তন করতে পারেন)
 MAX_RPS = 1500  # সর্বোচ্চ RPS (পরিবর্তন করতে পারেন)
 DAILY_CREDITS = 5  # দৈনিক ফ্রি ক্রেডিট
